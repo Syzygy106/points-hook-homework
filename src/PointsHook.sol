@@ -15,6 +15,12 @@ import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 
 contract PointsHook is BaseHook, ERC1155 {
+    // Happy hour configuration (2-4 PM UTC)
+    uint256 public constant HAPPY_HOUR_START = 14; // 2 PM UTC
+    uint256 public constant HAPPY_HOUR_END = 16;   // 4 PM UTC
+    uint256 public constant BONUS_MULTIPLIER = 150; // 50% bonus (150% = 100% + 50%)
+    uint256 public constant BASE_MULTIPLIER = 100;  // Base 100%
+
     constructor(IPoolManager _manager) BaseHook(_manager) {}
 
     function getHookPermissions()
@@ -59,22 +65,29 @@ contract PointsHook is BaseHook, ERC1155 {
         // We only mint points if user is buying TOKEN with ETH
         if (!swapParams.zeroForOne) return (this.afterSwap.selector, 0);
 
-        // Mint points equal to 20% of the amount of ETH they spent
-        // Since its a zeroForOne swap:
-        // if amountSpecified < 0:
-        //      this is an "exact input for output" swap
-        //      amount of ETH they spent is equal to |amountSpecified|
-        // if amountSpecified > 0:
-        //      this is an "exact output for input" swap
-        //      amount of ETH they spent is equal to BalanceDelta.amount0()
-
+        // Calculate base points (20% of ETH spent)
         uint256 ethSpendAmount = uint256(int256(-delta.amount0()));
-        uint256 pointsForSwap = ethSpendAmount / 5;
+        uint256 basePoints = ethSpendAmount / 5;
+
+        // Apply time-based bonus during happy hour
+        uint256 finalPoints = _applyTimeBonus(basePoints);
 
         // Mint the points
-        _assignPoints(key.toId(), hookData, pointsForSwap);
+        _assignPoints(key.toId(), hookData, finalPoints);
 
         return (this.afterSwap.selector, 0);
+    }
+
+    function _applyTimeBonus(uint256 basePoints) internal view returns (uint256) {
+        // Get current hour in UTC
+        uint256 currentHour = (block.timestamp / 3600) % 24;
+        
+        // Check if we're in happy hour (2-4 PM UTC)
+        if (currentHour >= HAPPY_HOUR_START && currentHour < HAPPY_HOUR_END) {
+            return (basePoints * BONUS_MULTIPLIER) / 100;
+        }
+        
+        return basePoints;
     }
 
     function _assignPoints(
@@ -95,5 +108,16 @@ contract PointsHook is BaseHook, ERC1155 {
         // Mint points to the user
         uint256 poolIdUint = uint256(PoolId.unwrap(poolId));
         _mint(user, poolIdUint, points, "");
+    }
+
+    // Helper function to check if we're currently in happy hour
+    function isHappyHour() public view returns (bool) {
+        uint256 currentHour = (block.timestamp / 3600) % 24;
+        return currentHour >= HAPPY_HOUR_START && currentHour < HAPPY_HOUR_END;
+    }
+
+    // Helper function to get current UTC hour
+    function getCurrentHour() public view returns (uint256) {
+        return (block.timestamp / 3600) % 24;
     }
 }

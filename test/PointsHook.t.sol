@@ -76,11 +76,6 @@ contract TestPointsHook is Test, Deployers, ERC1155TokenReceiver {
             sqrtPriceAtTickUpper,
             ethToAdd
         );
-        uint256 tokenToAdd = LiquidityAmounts.getAmount1ForLiquidity(
-            sqrtPriceAtTickLower,
-            SQRT_PRICE_1_1,
-            liquidityDelta
-        );
 
         modifyLiquidityRouter.modifyLiquidity{value: ethToAdd}(
             key,
@@ -92,6 +87,113 @@ contract TestPointsHook is Test, Deployers, ERC1155TokenReceiver {
             }),
             ZERO_BYTES
         );
+    }
+
+    function test_swap_regular_hours() public {
+        // Set time to regular hours (10 AM UTC)
+        vm.warp(getTimestampForHour(10));
+        
+        uint256 poolIdUint = uint256(PoolId.unwrap(key.toId()));
+        uint256 pointsBalanceOriginal = hook.balanceOf(
+            address(this),
+            poolIdUint
+        );
+
+        // Set user address in hook data
+        bytes memory hookData = abi.encode(address(this));
+
+        // Now we swap
+        // We will swap 0.001 ether for tokens
+        // We should get 20% of 0.001 * 10**18 points = 2 * 10**14
+        swapRouter.swap{value: 0.001 ether}(
+            key,
+            SwapParams({
+                zeroForOne: true,
+                amountSpecified: -0.001 ether, // Exact input for output swap
+                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            }),
+            PoolSwapTest.TestSettings({
+                takeClaims: false,
+                settleUsingBurn: false
+            }),
+            hookData
+        );
+        
+        uint256 pointsBalanceAfterSwap = hook.balanceOf(
+            address(this),
+            poolIdUint
+        );
+        
+        // Should get regular points (no bonus)
+        assertEq(pointsBalanceAfterSwap - pointsBalanceOriginal, 2 * 10 ** 14);
+        
+        // Verify we're not in happy hour
+        assertFalse(hook.isHappyHour());
+    }
+
+    function test_swap_happy_hour() public {
+        // Set time to happy hour (3 PM UTC)
+        vm.warp(getTimestampForHour(15));
+        
+        uint256 poolIdUint = uint256(PoolId.unwrap(key.toId()));
+        uint256 pointsBalanceOriginal = hook.balanceOf(
+            address(this),
+            poolIdUint
+        );
+
+        // Set user address in hook data
+        bytes memory hookData = abi.encode(address(this));
+
+        // Now we swap
+        // We will swap 0.001 ether for tokens
+        // We should get 20% of 0.001 * 10**18 points = 2 * 10**14
+        // Plus 50% bonus = 3 * 10**14
+        swapRouter.swap{value: 0.001 ether}(
+            key,
+            SwapParams({
+                zeroForOne: true,
+                amountSpecified: -0.001 ether, // Exact input for output swap
+                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            }),
+            PoolSwapTest.TestSettings({
+                takeClaims: false,
+                settleUsingBurn: false
+            }),
+            hookData
+        );
+        
+        uint256 pointsBalanceAfterSwap = hook.balanceOf(
+            address(this),
+            poolIdUint
+        );
+        
+        // Should get bonus points (50% extra)
+        assertEq(pointsBalanceAfterSwap - pointsBalanceOriginal, 3 * 10 ** 14);
+        
+        // Verify we're in happy hour
+        assertTrue(hook.isHappyHour());
+    }
+
+    function test_happy_hour_boundaries() public {
+        // Test at 1:59 PM (just before happy hour)
+        vm.warp(getTimestampForHour(13) + 59 * 60);
+        assertFalse(hook.isHappyHour());
+        
+        // Test at 2:00 PM (start of happy hour)
+        vm.warp(getTimestampForHour(14));
+        assertTrue(hook.isHappyHour());
+        
+        // Test at 3:30 PM (middle of happy hour)
+        vm.warp(getTimestampForHour(15) + 30 * 60);
+        assertTrue(hook.isHappyHour());
+        
+        // Test at 4:00 PM (end of happy hour)
+        vm.warp(getTimestampForHour(16));
+        assertFalse(hook.isHappyHour());
+        
+        // Test at 4:01 PM (just after happy hour)
+        vm.warp(getTimestampForHour(16) + 60);
+        assertFalse(hook.isHappyHour());
     }
 
     function test_swap() public {
@@ -126,5 +228,14 @@ contract TestPointsHook is Test, Deployers, ERC1155TokenReceiver {
             poolIdUint
         );
         assertEq(pointsBalanceAfterSwap - pointsBalanceOriginal, 2 * 10 ** 14);
+    }
+
+    // Helper function to get timestamp for a specific hour (UTC)
+    function getTimestampForHour(uint256 hour) internal view returns (uint256) {
+        // Start with a base timestamp (e.g., January 1, 2024)
+        uint256 baseTimestamp = 1704067200; // Jan 1, 2024 00:00:00 UTC
+        
+        // Calculate the timestamp for the specified hour on the same day
+        return baseTimestamp + (hour * 3600);
     }
 }
